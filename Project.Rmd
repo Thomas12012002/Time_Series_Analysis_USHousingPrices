@@ -1,0 +1,205 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r}
+install.packages("forecast", repos = "https://cloud.r-project.org/")
+install.packages("tseries", repos = "https://cloud.r-project.org/")
+install.packages("ggplot2", repos = "https://cloud.r-project.org/")
+
+```
+
+
+
+```{r}
+library(forecast)
+library(tseries)
+library(ggplot2)
+
+housing_data <- read.csv("Monthly.csv", stringsAsFactors = FALSE)
+housing_data$DATE <- as.Date(housing_data$DATE, format="%Y-%m-%d")
+housing_data[,3] <- as.numeric(housing_data[,3])
+housing_data <- housing_data[!is.na(housing_data[,3]), ]
+
+housing_ts <- ts(housing_data[,3], start=c(1990, 1), frequency=12)
+ts.plot(housing_ts, main="Housing Prices Over Time", ylab="Price", xlab="Time", col="blue")
+
+
+```
+
+#The time series plot looks good, there seems to be some upward trend with some clear seasonalities.
+
+```{r}
+
+housing_decomposed <- decompose(housing_ts)
+plot(housing_decomposed)
+```
+
+#This is a clear seasonality that we may need to differencing, the detrending part may not need to be implemented due to its unclear behavior.
+
+```{r}
+adf_test <- adf.test(housing_ts)
+print(adf_test)
+
+housing_ts_diff <- diff(housing_ts)
+adf_test_diff <- adf.test(housing_ts_diff)
+print(adf_test_diff)
+```
+
+#Noe the p-value is below 0.05 which is good after differencing
+
+```{r}
+acf(housing_ts_diff, main="ACF of Differenced Series")
+pacf(housing_ts_diff, main="PACF of Differenced Series")
+
+```
+
+#The ACF shows a downward trend in lags and PACF clearly shows some statistically significant lags. So we decide to take p=2,q=0, d=1 and Q=1, P=2,D=1.
+
+```{r}
+sarima_model_auto <- auto.arima(housing_ts_diff, seasonal = TRUE)
+sarima_model_custom <- arima(housing_ts_diff, order = c(0, 1, 2), 
+                             seasonal = list(order = c(1, 1, 2), period = 12))
+arima_model <- arima(housing_ts_diff, order = c(1, 1, 1))
+housing_data$time <- as.numeric(housing_data$DATE)
+
+```
+
+#We then compare all the models in terms of AIC, BIC, RMSE, and Ljung box test and Shapiro Wilk p test
+
+```{r}
+
+
+# Linear 
+linear_model <- lm(housing_data[,3] ~ housing_data$time)
+
+# Quadratic 
+quadratic_model <- lm(housing_data[,3] ~ poly(housing_data$time, 2, raw=TRUE))
+
+housing_data$sin_time <- sin(2 * pi * housing_data$time / 12)
+housing_data$cos_time <- cos(2 * pi * housing_data$time / 12)
+cyclic_model <- lm(housing_data[,3] ~ housing_data$sin_time + housing_data$cos_time)
+sarima_residuals_auto <- residuals(sarima_model_auto)
+sarima_residuals_custom <- residuals(sarima_model_custom)
+arima_residuals <- residuals(arima_model)
+linear_model_residuals <- residuals(linear_model)
+quadratic_model_residuals <- residuals(quadratic_model)
+cyclic_model_residuals <- residuals(cyclic_model)
+sarima_auto_rmse <- sqrt(mean(sarima_residuals_auto^2))
+sarima_custom_rmse <- sqrt(mean(sarima_residuals_custom^2))
+arima_rmse <- sqrt(mean(arima_residuals^2))
+linear_model_rmse <- sqrt(mean(linear_model_residuals^2))
+quadratic_model_rmse <- sqrt(mean(quadratic_model_residuals^2))
+cyclic_model_rmse <- sqrt(mean(cyclic_model_residuals^2))
+shapiro_auto <- shapiro.test(sarima_residuals_auto)
+shapiro_custom <- shapiro.test(sarima_residuals_custom)
+shapiro_arima <- shapiro.test(arima_residuals)
+shapiro_linear <- shapiro.test(linear_model_residuals)
+shapiro_quadratic <- shapiro.test(quadratic_model_residuals)
+shapiro_cyclic <- shapiro.test(cyclic_model_residuals)
+ljung_auto <- Box.test(sarima_residuals_auto, lag = 20, type = "Ljung-Box")
+ljung_custom <- Box.test(sarima_residuals_custom, lag = 20, type = "Ljung-Box")
+ljung_arima <- Box.test(arima_residuals, lag = 20, type = "Ljung-Box")
+ljung_linear <- Box.test(linear_model_residuals, lag = 20, type = "Ljung-Box")
+ljung_quadratic <- Box.test(quadratic_model_residuals, lag = 20, type = "Ljung-Box")
+ljung_cyclic <- Box.test(cyclic_model_residuals, lag = 20, type = "Ljung-Box")
+
+# Compare the models 
+sarima_auto_aic <- AIC(sarima_model_auto)
+sarima_auto_bic <- BIC(sarima_model_auto)
+sarima_custom_aic <- AIC(sarima_model_custom)
+sarima_custom_bic <- BIC(sarima_model_custom)
+arima_aic <- AIC(arima_model)
+arima_bic <- BIC(arima_model)
+linear_model_aic <- AIC(linear_model)
+linear_model_bic <- BIC(linear_model)
+quadratic_model_aic <- AIC(quadratic_model)
+quadratic_model_bic <- BIC(quadratic_model)
+cyclic_model_aic <- AIC(cyclic_model)
+cyclic_model_bic <- BIC(cyclic_model)
+
+comparison_table <- data.frame(
+  Model = c("Auto SARIMA", "Custom SARIMA", "ARIMA", "Linear (Time)", "Quadratic (Time)", "Cyclic (Time)"),
+  AIC = c(sarima_auto_aic, sarima_custom_aic, arima_aic, linear_model_aic, quadratic_model_aic, cyclic_model_aic),
+  BIC = c(sarima_auto_bic, sarima_custom_bic, arima_bic, linear_model_bic, quadratic_model_bic, cyclic_model_bic),
+  RMSE = c(sarima_auto_rmse, sarima_custom_rmse, arima_rmse, linear_model_rmse, quadratic_model_rmse, cyclic_model_rmse),
+  Shapiro_Wilk_p_value = c(shapiro_auto$p.value, shapiro_custom$p.value, shapiro_arima$p.value, shapiro_linear$p.value, shapiro_quadratic$p.value, shapiro_cyclic$p.value),
+  Ljung_Box_p_value = c(ljung_auto$p.value, ljung_custom$p.value, ljung_arima$p.value, ljung_linear$p.value, ljung_quadratic$p.value, ljung_cyclic$p.value)
+)
+print(comparison_table)
+
+```
+
+#WE clearly see the the lowest AIC and BIC and RMSE is the auto Sarima model. THe custom Sarima is followed. The worst is the cyclic function of time model. Their p value of Ljung box should be good if it is above 0.05 which shows the normally distribution of the data, only auto Sarima achieves this. the p value of Shapiro of all models are below 0.05.
+
+```{r}
+par(mfrow=c(2,6))  
+
+# Auto SARIMA
+plot(sarima_residuals_auto, main="Auto SARIMA Residuals")
+qqnorm(sarima_residuals_auto, main="Q-Q Plot: Auto SARIMA")
+qqline(sarima_residuals_auto, col="red")
+
+# Custom SARIMA
+plot(sarima_residuals_custom, main="Custom SARIMA Residuals")
+qqnorm(sarima_residuals_custom, main="Q-Q Plot: Custom SARIMA")
+qqline(sarima_residuals_custom, col="red")
+
+# ARIMA
+plot(arima_residuals, main="ARIMA Residuals")
+qqnorm(arima_residuals, main="Q-Q Plot: ARIMA")
+qqline(arima_residuals, col="red")
+
+# Linear 
+plot(linear_model_residuals, main="Linear Model Residuals")
+qqnorm(linear_model_residuals, main="Q-Q Plot: Linear Model")
+qqline(linear_model_residuals, col="red")
+
+# Quadratic 
+plot(quadratic_model_residuals, main="Quadratic Model Residuals")
+qqnorm(quadratic_model_residuals, main="Q-Q Plot: Quadratic Model")
+qqline(quadratic_model_residuals, col="red")
+
+# Cyclic 
+plot(cyclic_model_residuals, main="Cyclic Model Residuals")
+qqnorm(cyclic_model_residuals, main="Q-Q Plot: Cyclic Model")
+qqline(cyclic_model_residuals, col="red")
+```
+
+The function of time models seem to best capture the residuals which clearly shown in the Q-Q plot. 
+
+```{r}
+par(mfrow=c(1,1))
+
+forecast_horizon <- 60  # 5 years = 60 months
+forecasted_values_auto <- forecast(sarima_model_auto, h=forecast_horizon, level=c(95))
+
+plot(forecasted_values_auto, main="Auto SARIMA Forecast for Housing Prices (Next 5 Years)", 
+     ylab="Price", xlab="Time", col="blue")
+
+checkresiduals(sarima_model_auto)
+
+```
+
+
+# The housing market bubble and thecovid 19 that affected the prices making them unstable/non-stationary. As in 2010 and about 2020. 
+
+
+
+# In the below I check the coefficients of each models including Arima and Sarima
+```{r}
+sarima_model_auto$coef
+
+```
+
+```{r}
+sarima_model_custom$coef
+
+```
+
+```{r}
+arima_model$coef
+
+```
+
